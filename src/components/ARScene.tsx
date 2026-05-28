@@ -205,31 +205,28 @@ export default function ARScene() {
 
                     if (modelPlacedRef.current) return;
 
-                    // UPDATE MATRICES
-                    anchor.group.updateWorldMatrix(true, true);
+                    // Update matrices first
+                    anchor.group.updateMatrixWorld(true);
 
-                    // GET ONLY POSITION
-                    const worldPosition = new THREE.Vector3();
+                    // Get world position only
+                    const position = new THREE.Vector3();
+                    anchor.group.getWorldPosition(position);
 
-                    anchor.group.getWorldPosition(worldPosition);
+                    // Place world group
+                    worldGroup.position.copy(position);
 
-                    // PLACE MODEL IN WORLD
-                    worldGroup.position.copy(worldPosition);
-
-                    // IMPORTANT:
-                    // remove QR rotation influence
+                    // Keep upright
                     worldGroup.rotation.set(0, 0, 0);
 
-                    // NORMAL SCALE
-                    worldGroup.scale.set(1, 1, 1);
-
-                    // ADD MODEL ONCE
+                    // Add model
                     worldGroup.add(model);
+
+                    // Hide target tracking visuals
                     anchor.group.visible = false;
 
                     modelPlacedRef.current = true;
 
-                    console.log("Model fixed in real-world space");
+                    console.log("Placed successfully");
                 };
                 // ---------------------------------------
                 // RENDER LOOP
