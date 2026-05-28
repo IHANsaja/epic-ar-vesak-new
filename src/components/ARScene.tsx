@@ -6,8 +6,6 @@ import * as THREE from "three";
 
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-import { MindARThree } from "mind-ar/dist/mindar-image-three.prod.js";
-
 export default function ARScene() {
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -19,6 +17,14 @@ export default function ARScene() {
         let mindarThree: any;
 
         const start = async () => {
+
+            // =========================
+            // DYNAMIC IMPORT (browser-only)
+            // =========================
+
+            const { MindARThree } = await import(
+                "mind-ar/dist/mindar-image-three.prod.js"
+            );
 
             // =========================
             // MINDAR SETUP
@@ -86,7 +92,7 @@ export default function ARScene() {
 
             loader.load(
                 "/models/VLSSL.glb",
-                (gltf) => {
+                (gltf: any) => {
 
                     const model = gltf.scene;
 
@@ -102,7 +108,7 @@ export default function ARScene() {
 
                     const subLanterns: THREE.Object3D[] = [];
 
-                    model.traverse((obj) => {
+                    model.traverse((obj: THREE.Object3D) => {
 
                         const name = obj.name.toLowerCase();
 
@@ -122,7 +128,7 @@ export default function ARScene() {
                         model.rotation.y += 0.005;
 
                         // Rotate sub lanterns
-                        subLanterns.forEach((lantern, index) => {
+                        subLanterns.forEach((lantern: THREE.Object3D, index: number) => {
 
                             lantern.rotation.y +=
                                 index % 2 === 0
