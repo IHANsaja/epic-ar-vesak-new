@@ -33,6 +33,10 @@ export default function ARScene() {
             mindarThree = new MindARThree({
                 container: containerRef.current,
                 imageTargetSrc: "/targets/vesak.mind",
+                filterMinCF: 0.0001,
+                filterBeta: 0.001,
+                missTolerance: 10,
+                warmupTolerance: 5,
             });
 
             const {
@@ -84,6 +88,18 @@ export default function ARScene() {
 
             const anchor = mindarThree.addAnchor(0);
 
+            // Create an upright container group.
+            // In MindAR, the target image coordinate system is flat on the X-Y plane with Z pointing out.
+            // If the QR target is placed flat on the ground:
+            // - The target's Z-axis points straight UP.
+            // - The target's Y-axis points forward along the ground.
+            // Standard 3D models (like GLTF) have Y as their vertical "up" axis.
+            // To align the model's Y-axis (up) with the target's Z-axis (physical up),
+            // we rotate the container by 90 degrees (Math.PI / 2) around the local X-axis.
+            const modelContainer = new THREE.Group();
+            modelContainer.rotation.x = Math.PI / 2;
+            anchor.group.add(modelContainer);
+
             // =========================
             // LOAD GLB MODEL
             // =========================
@@ -96,11 +112,21 @@ export default function ARScene() {
 
                     const model = gltf.scene;
 
-                    model.scale.set(0.4, 0.4, 0.4);
+                    // Make the model 3x bigger (original was 0.4, 3 * 0.4 = 1.2)
+                    model.scale.set(1.2, 1.2, 1.2);
 
-                    model.position.set(0, 0, 0);
+                    // Compute the bounding box of the model to center it and align its base with Y = 0
+                    const box = new THREE.Box3().setFromObject(model);
+                    const center = new THREE.Vector3();
+                    box.getCenter(center);
 
-                    anchor.group.add(model);
+                    // Adjust the position of the model so that its bottom-center sits at the origin (0, 0, 0)
+                    model.position.x = -center.x;
+                    model.position.z = -center.z;
+                    model.position.y = -box.min.y;
+
+                    // Add the model to the upright container
+                    modelContainer.add(model);
 
                     // =========================
                     // FIND SUB LANTERNS
@@ -124,7 +150,7 @@ export default function ARScene() {
 
                     renderer.setAnimationLoop(() => {
 
-                        // Rotate whole model
+                        // Rotate whole model around its local Y-axis (which is vertical)
                         model.rotation.y += 0.005;
 
                         // Rotate sub lanterns
