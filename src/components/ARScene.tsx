@@ -202,34 +202,35 @@ export default function ARScene() {
                 // ---------------------------------------
 
                 anchor.onTargetFound = () => {
+
                     if (modelPlacedRef.current) return;
 
-                    // UPDATE WORLD MATRICES
+                    // UPDATE MATRICES
                     anchor.group.updateWorldMatrix(true, true);
 
-                    // GET WORLD POSITION
+                    // GET ONLY POSITION
                     const worldPosition = new THREE.Vector3();
-                    const worldQuaternion = new THREE.Quaternion();
-                    const worldScale = new THREE.Vector3();
 
-                    anchor.group.matrixWorld.decompose(
-                        worldPosition,
-                        worldQuaternion,
-                        worldScale
-                    );
+                    anchor.group.getWorldPosition(worldPosition);
 
+                    // PLACE MODEL IN WORLD
                     worldGroup.position.copy(worldPosition);
-                    worldGroup.quaternion.copy(worldQuaternion);
-                    worldGroup.scale.copy(worldScale);
 
-                    // ADD MODEL ONLY ONCE
+                    // IMPORTANT:
+                    // remove QR rotation influence
+                    worldGroup.rotation.set(0, 0, 0);
+
+                    // NORMAL SCALE
+                    worldGroup.scale.set(1, 1, 1);
+
+                    // ADD MODEL ONCE
                     worldGroup.add(model);
+                    anchor.group.visible = false;
 
                     modelPlacedRef.current = true;
 
-                    console.log("Model fixed in world space");
+                    console.log("Model fixed in real-world space");
                 };
-
                 // ---------------------------------------
                 // RENDER LOOP
                 // ---------------------------------------
