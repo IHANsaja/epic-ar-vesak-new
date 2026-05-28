@@ -30,6 +30,49 @@ export default function ARScene() {
     const [wishText, setWishText] = useState(PRESET_WISHES[0].text);
     const [sparks, setSparks] = useState<{ id: number; left: string; delay: string; duration: string; size: string }[]>([]);
 
+    const [isTargetVisible, setIsTargetVisible] = useState(false);
+    const [hasBeenDetected, setHasBeenDetected] = useState(false);
+    const [needsGyroPermission, setNeedsGyroPermission] = useState(false);
+
+    const isTargetVisibleRef = useRef(false);
+    const hasBeenDetectedRef = useRef(false);
+
+    const gyroRef = useRef({
+        initialAlpha: null as number | null,
+        initialBeta: null as number | null,
+        initialGamma: null as number | null,
+        currentAlpha: null as number | null,
+        currentBeta: null as number | null,
+        currentGamma: null as number | null
+    });
+
+    // Listen to Device Orientation (Gyroscope)
+    useEffect(() => {
+        const handleOrientation = (e: DeviceOrientationEvent) => {
+            if (e.alpha !== null && e.beta !== null && e.gamma !== null) {
+                gyroRef.current.currentAlpha = e.alpha;
+                gyroRef.current.currentBeta = e.beta;
+                gyroRef.current.currentGamma = e.gamma;
+            }
+        };
+
+        window.addEventListener("deviceorientation", handleOrientation);
+        return () => {
+            window.removeEventListener("deviceorientation", handleOrientation);
+        };
+    }, []);
+
+    // Check if iOS Safari requires permission
+    useEffect(() => {
+        if (
+            typeof window !== "undefined" &&
+            typeof DeviceOrientationEvent !== "undefined" &&
+            (DeviceOrientationEvent as any).requestPermission
+        ) {
+            setNeedsGyroPermission(true);
+        }
+    }, []);
+
     // Generate random spark coordinates on mount
     useEffect(() => {
         const generatedSparks = Array.from({ length: 22 }).map((_, i) => ({
@@ -72,6 +115,24 @@ export default function ARScene() {
 
     // Handle AR Start + Request Fullscreen to hide URL bar
     const handleStart = async () => {
+        // Request Gyroscope permissions on iOS if needed
+        if (
+            typeof window !== "undefined" &&
+            typeof DeviceOrientationEvent !== "undefined" &&
+            (DeviceOrientationEvent as any).requestPermission
+        ) {
+            try {
+                const permissionState = await (DeviceOrientationEvent as any).requestPermission();
+                if (permissionState === "granted") {
+                    console.log("DeviceOrientation permission granted");
+                } else {
+                    console.warn("DeviceOrientation permission denied");
+                }
+            } catch (error) {
+                console.error("Error requesting DeviceOrientation permission:", error);
+            }
+        }
+
         try {
             const docEl = document.documentElement;
             if (docEl.requestFullscreen) {
@@ -156,12 +217,12 @@ export default function ARScene() {
 
             const anchor = mindarThree.addAnchor(0);
 
+            // FIXED WORLD GROUP AND GYRO PIVOT
+            const gyroPivot = new THREE.Group();
+            scene.add(gyroPivot);
 
-            // FIXED WORLD GROUP
             const worldGroup = new THREE.Group();
-            scene.add(worldGroup);
-
-            const modelPlacedRef = { current: false };
+            gyroPivot.add(worldGroup);
 
             // Load the GLB model
             const loader = new GLTFLoader();
@@ -186,6 +247,9 @@ export default function ARScene() {
                     new THREE.Euler(Math.PI / 2, 0, 0)
                 );
 
+                // Add model to worldGroup initially
+                worldGroup.add(model);
+
                 // FIND SUB LANTERNS
                 const subLanterns: THREE.Object3D[] = [];
 
@@ -198,42 +262,38 @@ export default function ARScene() {
                 });
 
                 // ---------------------------------------
-                // PLACE MODEL ONLY ON FIRST QR DETECTION
+                // ANCHOR TARGET DETECTION HANDLERS
                 // ---------------------------------------
-
                 anchor.onTargetFound = () => {
-
-                    if (modelPlacedRef.current) return;
-
-                    // Update matrices first
-                    anchor.group.updateMatrixWorld(true);
-
-                    // Get world position only
-                    const position = new THREE.Vector3();
-                    anchor.group.getWorldPosition(position);
-
-                    // Place world group
-                    worldGroup.position.copy(position);
-
-                    // Keep upright
-                    worldGroup.rotation.set(0, 0, 0);
-
-                    // Add model
-                    worldGroup.add(model);
-
-                    // Hide target tracking visuals
-                    anchor.group.visible = false;
-
-                    modelPlacedRef.current = true;
-
-                    console.log("Placed successfully");
+                    isTargetVisibleRef.current = true;
+                    setIsTargetVisible(true);
+                    
+                    if (!hasBeenDetectedRef.current) {
+                        hasBeenDetectedRef.current = true;
+                        setHasBeenDetected(true);
+                        worldGroup.visible = true;
+                    }
+                    console.log("Placed and tracked successfully");
                 };
+
+                anchor.onTargetLost = () => {
+                    isTargetVisibleRef.current = false;
+                    setIsTargetVisible(false);
+                    console.log("Target tracking lost, switched to Gyro Explore Mode");
+                };
+
+                // Variables to track smooth lerping targets
+                const targetPos = new THREE.Vector3();
+                const targetQuat = new THREE.Quaternion();
+                const targetScale = new THREE.Vector3(1.0, 1.0, 1.0);
+
+                // Keep invisible until first detection
+                worldGroup.visible = false;
+
                 // ---------------------------------------
                 // RENDER LOOP
                 // ---------------------------------------
-
                 renderer.setAnimationLoop(() => {
-
                     // ROTATE MAIN MODEL
                     model.rotation.y += 0.005;
 
@@ -257,6 +317,58 @@ export default function ARScene() {
                         festiveColors[nextColorIndex],
                         lerpT
                     );
+
+                    // ----------------------------------------------------
+                    // SMOOTH TRANSITIONS & SPATIAL LERPING
+                    // ----------------------------------------------------
+                    if (hasBeenDetectedRef.current) {
+                        if (isTargetVisibleRef.current) {
+                            // QR Tracked Mode: Snap and follow anchor group
+                            anchor.group.updateMatrixWorld(true);
+                            anchor.group.getWorldPosition(targetPos);
+                            anchor.group.getWorldQuaternion(targetQuat);
+                            targetScale.copy(anchor.group.scale);
+
+                            // Reset Gyro pivot when actively tracking
+                            gyroPivot.rotation.set(0, 0, 0);
+                            gyroRef.current.initialAlpha = null;
+                        } else {
+                            // Target Lost Mode: Glide to screen center and activate gyroscope mapping
+                            targetPos.set(0, -0.3, -1.8);
+                            targetQuat.setFromEuler(new THREE.Euler(0, 0, 0));
+                            targetScale.set(1.0, 1.0, 1.0);
+
+                            // Apply device gyro offset
+                            if (gyroRef.current.initialAlpha === null && 
+                                gyroRef.current.currentAlpha !== null &&
+                                gyroRef.current.currentBeta !== null &&
+                                gyroRef.current.currentGamma !== null) {
+                                gyroRef.current.initialAlpha = gyroRef.current.currentAlpha;
+                                gyroRef.current.initialBeta = gyroRef.current.currentBeta;
+                                gyroRef.current.initialGamma = gyroRef.current.currentGamma;
+                            }
+
+                            if (gyroRef.current.initialAlpha !== null && 
+                                gyroRef.current.initialBeta !== null && 
+                                gyroRef.current.initialGamma !== null && 
+                                gyroRef.current.currentAlpha !== null &&
+                                gyroRef.current.currentBeta !== null &&
+                                gyroRef.current.currentGamma !== null) {
+                                const deltaAlpha = gyroRef.current.currentAlpha - gyroRef.current.initialAlpha;
+                                const deltaBeta = gyroRef.current.currentBeta - gyroRef.current.initialBeta;
+                                const deltaGamma = gyroRef.current.currentGamma - gyroRef.current.initialGamma;
+
+                                gyroPivot.rotation.y = -THREE.MathUtils.degToRad(deltaAlpha);
+                                gyroPivot.rotation.x = -THREE.MathUtils.degToRad(deltaBeta);
+                                gyroPivot.rotation.z = THREE.MathUtils.degToRad(deltaGamma);
+                            }
+                        }
+
+                        // Apply organic damping (lerp/slerp)
+                        worldGroup.position.lerp(targetPos, 0.08);
+                        worldGroup.quaternion.slerp(targetQuat, 0.08);
+                        worldGroup.scale.lerp(targetScale, 0.08);
+                    }
 
                     renderer.render(scene, camera);
                 });
@@ -382,6 +494,160 @@ export default function ARScene() {
                         font-weight: 300;
                     }
 
+                    /* Scanning Reticle */
+                    .ar-scanning-reticle {
+                        position: absolute;
+                        top: 45%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        z-index: 9998;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        gap: 20px;
+                        pointer-events: none;
+                    }
+
+                    .ar-reticle-box {
+                        width: 240px;
+                        height: 240px;
+                        position: relative;
+                        border: 1px dashed rgba(212, 175, 55, 0.4);
+                        border-radius: 20px;
+                        animation: pulseBox 2s infinite ease-in-out;
+                    }
+
+                    .ar-reticle-box .corner {
+                        position: absolute;
+                        width: 25px;
+                        height: 25px;
+                        border: 4px solid #d4af37;
+                    }
+
+                    .ar-reticle-box .top-left {
+                        top: -2px;
+                        left: -2px;
+                        border-right: none;
+                        border-bottom: none;
+                        border-top-left-radius: 12px;
+                    }
+
+                    .ar-reticle-box .top-right {
+                        top: -2px;
+                        right: -2px;
+                        border-left: none;
+                        border-bottom: none;
+                        border-top-right-radius: 12px;
+                    }
+
+                    .ar-reticle-box .bottom-left {
+                        bottom: -2px;
+                        left: -2px;
+                        border-right: none;
+                        border-top: none;
+                        border-bottom-left-radius: 12px;
+                    }
+
+                    .ar-reticle-box .bottom-right {
+                        bottom: -2px;
+                        right: -2px;
+                        border-left: none;
+                        border-top: none;
+                        border-bottom-right-radius: 12px;
+                    }
+
+                    .ar-scanning-text {
+                        font-family: 'Outfit', sans-serif;
+                        font-size: 14px;
+                        font-weight: 500;
+                        color: #ffffff;
+                        background: rgba(10, 5, 20, 0.75);
+                        backdrop-filter: blur(8px);
+                        padding: 10px 20px;
+                        border-radius: 20px;
+                        border: 1px solid rgba(212, 175, 55, 0.25);
+                        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+                        animation: pulseText 1.5s infinite alternate;
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                    }
+
+                    @keyframes pulseBox {
+                        0%, 100% { transform: scale(1); opacity: 0.8; }
+                        50% { transform: scale(1.03); opacity: 1; box-shadow: 0 0 20px rgba(212, 175, 55, 0.2); }
+                    }
+
+                    @keyframes pulseText {
+                        from { opacity: 0.8; }
+                        to { opacity: 1; }
+                    }
+
+                    /* Status HUD Card */
+                    .ar-hud-status {
+                        position: absolute;
+                        top: 20px;
+                        right: 20px;
+                        z-index: 10000;
+                        background: rgba(10, 5, 20, 0.7);
+                        backdrop-filter: blur(12px);
+                        -webkit-backdrop-filter: blur(12px);
+                        border: 1px solid rgba(212, 175, 55, 0.3);
+                        border-radius: 30px;
+                        padding: 10px 18px;
+                        font-family: 'Outfit', sans-serif;
+                        font-size: 13px;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+                        border-bottom: 2px solid rgba(212, 175, 55, 0.2);
+                    }
+
+                    .ar-status-dot {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 50%;
+                    }
+
+                    .ar-status-dot.active {
+                        background: #00ff66;
+                        box-shadow: 0 0 10px #00ff66;
+                    }
+
+                    .ar-status-dot.explore {
+                        background: #ffaa00;
+                        box-shadow: 0 0 10px #ffaa00;
+                    }
+
+                    .ar-status-text {
+                        font-weight: 600;
+                        color: #ffffff;
+                        letter-spacing: 0.5px;
+                    }
+
+                    /* Explore Banner */
+                    .ar-explore-banner {
+                        position: absolute;
+                        bottom: 120px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        z-index: 10000;
+                        width: 85%;
+                        max-width: 360px;
+                        background: rgba(255, 170, 0, 0.12);
+                        backdrop-filter: blur(8px);
+                        border: 1px solid rgba(255, 170, 0, 0.4);
+                        border-radius: 12px;
+                        padding: 8px 16px;
+                        text-align: center;
+                        font-family: 'Outfit', sans-serif;
+                        font-size: 12px;
+                        color: #ffcc66;
+                        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+                        animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+                    }
+
                     @keyframes slideUp {
                         from { transform: translate(-50%, 40px); opacity: 0; }
                         to { transform: translate(-50%, 0); opacity: 1; }
@@ -392,6 +658,38 @@ export default function ARScene() {
                         50% { transform: translateY(-5px); }
                     }
                 `}</style>
+
+                {/* Scanning reticle: pulsing frame until first target is found */}
+                {!isTargetVisible && !hasBeenDetected && (
+                    <div className="ar-scanning-reticle">
+                        <div className="ar-reticle-box">
+                            <span className="corner top-left"></span>
+                            <span className="corner top-right"></span>
+                            <span className="corner bottom-left"></span>
+                            <span className="corner bottom-right"></span>
+                        </div>
+                        <div className="ar-scanning-text">
+                            <span>🔍 Align camera with Vesak QR Code</span>
+                        </div>
+                    </div>
+                )}
+
+                {/* Glassmorphic AR status indicator in top-right */}
+                {hasBeenDetected && (
+                    <div className="ar-hud-status">
+                        <div className={`ar-status-dot ${isTargetVisible ? "active" : "explore"}`}></div>
+                        <span className="ar-status-text">
+                            {isTargetVisible ? "✨ QR TRACKED" : "📌 EXPLORE MODE (GYRO)"}
+                        </span>
+                    </div>
+                )}
+
+                {/* Instruction toast when target is lost */}
+                {hasBeenDetected && !isTargetVisible && (
+                    <div className="ar-explore-banner">
+                        <span>💡 Turn your phone or walk around to see the lantern from different angles!</span>
+                    </div>
+                )}
 
                 {/* Exit back button */}
                 <button className="ar-btn-back" onClick={handleExit}>
